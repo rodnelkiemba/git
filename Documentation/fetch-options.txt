@@ -307,3 +307,8 @@ endif::git-pull[]
 -6::
 --ipv6::
 	Use IPv6 addresses only, ignoring IPv4 addresses.
+
+--object-info=[<arguments>]::
+	Fetches only the relevant information passed in arguments from a
+	specific remote and set of object ids. Object 'size' is currently
+	the only supported argument.

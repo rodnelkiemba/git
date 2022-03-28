@@ -59,6 +59,7 @@ struct transport_vtable {
 	 * use. disconnect() releases these resources.
 	 **/
 	int (*disconnect)(struct transport *connection);
+	int (*fetch_object_info)(struct transport *transport, struct oid_array *oids);
 };
 
 #endif

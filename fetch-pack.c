@@ -1269,6 +1269,27 @@ static void write_command_and_capabilities(struct strbuf *req_buf,
 	packet_buf_delim(req_buf);
 }
 
+void send_object_info_request(int fd_out, struct object_info_args *args)
+{
+	struct strbuf req_buf = STRBUF_INIT;
+	int i;
+
+	write_command_and_capabilities(&req_buf, args->server_options, "object-info");
+
+	if (string_list_has_string(args->object_info_options, "size"))
+		packet_buf_write(&req_buf, "size");
+
+	for (i = 0; i < args->oids->nr; i++) {
+		packet_buf_write(&req_buf, "oid %s\n", oid_to_hex(&args->oids->oid[i]));
+	}
+
+	packet_buf_flush(&req_buf);
+	if (write_in_full(fd_out, req_buf.buf, req_buf.len) < 0)
+		die_errno(_("unable to write request to remote"));
+
+	strbuf_release(&req_buf);
+}
+
 static int send_fetch_request(struct fetch_negotiator *negotiator, int fd_out,
 			      struct fetch_pack_args *args,
 			      const struct ref *wants, struct oidset *common,
@@ -1604,6 +1625,10 @@ static struct ref *do_fetch_pack_v2(struct fetch_pack_args *args,
 	if (args->depth > 0 || args->deepen_since || args->deepen_not)
 		args->deepen = 1;
 
+	if (args->object_info) {
+		state = FETCH_SEND_REQUEST;
+	}
+
 	while (state != FETCH_DONE) {
 		switch (state) {
 		case FETCH_CHECK_LOCAL:
@@ -1613,7 +1638,7 @@ static struct ref *do_fetch_pack_v2(struct fetch_pack_args *args,
 			/* Filter 'ref' by 'sought' and those that aren't local */
 			mark_complete_and_common_ref(negotiator, args, &ref);
 			filter_refs(args, &ref, sought, nr_sought);
-			if (everything_local(args, &ref))
+			if (!args->object_info && everything_local(args, &ref))
 				state = FETCH_DONE;
 			else
 				state = FETCH_SEND_REQUEST;
@@ -2000,7 +2025,18 @@ struct ref *fetch_pack(struct fetch_pack_args *args,
 		args->connectivity_checked = 1;
 	}
 
-	update_shallow(args, sought, nr_sought, &si);
+	if (args->object_info) {
+		struct ref *ref_cpy_reader = ref_cpy;
+		unsigned long size = 0;
+		while (ref_cpy_reader) {
+			oid_object_info(the_repository, &(ref_cpy_reader->old_oid), &size);
+			printf("%s %li\n", oid_to_hex(&(ref_cpy_reader->old_oid)), size);
+			ref_cpy_reader = ref_cpy_reader->next;
+		}
+	}
+	else {
+		update_shallow(args, sought, nr_sought, &si);
+	}
 cleanup:
 	clear_shallow_info(&si);
 	oid_array_clear(&shallows_scratch);

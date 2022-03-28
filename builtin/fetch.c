@@ -29,6 +29,9 @@
 #include "commit-graph.h"
 #include "shallow.h"
 #include "worktree.h"
+#include "protocol.h"
+#include "pkt-line.h"
+#include "connect.h"
 
 #define FORCED_UPDATES_DELAY_WARNING_IN_MS (10 * 1000)
 
@@ -37,6 +40,7 @@ static const char * const builtin_fetch_usage[] = {
 	N_("git fetch [<options>] <group>"),
 	N_("git fetch --multiple [<options>] [(<repository> | <group>)...]"),
 	N_("git fetch --all [<options>]"),
+	N_("git fetch --object-info=[<arguments>] <remote> [<object-ids>]"),
 	NULL
 };
 
@@ -86,6 +90,7 @@ static struct string_list negotiation_tip = STRING_LIST_INIT_NODUP;
 static int fetch_write_commit_graph = -1;
 static int stdin_refspecs = 0;
 static int negotiate_only;
+static struct string_list object_info_options = STRING_LIST_INIT_NODUP;
 
 static int git_fetch_config(const char *k, const char *v, void *cb)
 {
@@ -221,6 +226,8 @@ static struct option builtin_fetch_options[] = {
 		 N_("write the commit-graph after fetching")),
 	OPT_BOOL(0, "stdin", &stdin_refspecs,
 		 N_("accept refspecs from stdin")),
+	OPT_STRING_LIST(0, "object-info", &object_info_options, N_("option"),
+		 N_("command request arguments")),
 	OPT_END()
 };
 
@@ -2087,6 +2094,7 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 	struct remote *remote = NULL;
 	int result = 0;
 	int prune_tags_ok = 1;
+	struct oid_array object_info_oids = OID_ARRAY_INIT;
 
 	packet_trace_identity("fetch");
 
@@ -2168,7 +2176,19 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 	if (dry_run)
 		write_fetch_head = 0;
 
-	if (all) {
+	if (object_info_options.nr > 0) {
+		if (argc == 0 || argc == 1) {
+			die(_("must supply remote and object ids when using --object-info"));
+		} else {
+			struct object_id oid;
+			remote = remote_get(argv[0]);
+			for (i = 1; i < argc; i++) {
+				if (get_oid(argv[i], &oid))
+					return error(_("malformed object id '%s'"), argv[i]);
+				oid_array_append(&object_info_oids, &oid);
+			}
+		}
+	} else if (all) {
 		if (argc == 1)
 			die(_("fetch --all does not take a repository argument"));
 		else if (argc > 1)
@@ -2199,7 +2219,19 @@ int cmd_fetch(int argc, const char **argv, const char *prefix)
 		}
 	}
 
-	if (negotiate_only) {
+	if (object_info_options.nr > 0) {
+		if (!remote)
+			die(_("must supply remote when using --object-info"));
+		gtransport = prepare_transport(remote, 1);
+		if (gtransport->smart_options) {
+			gtransport->smart_options->object_info = 1;
+			gtransport->smart_options->object_info_oids = &object_info_oids;
+			gtransport->smart_options->object_info_options = &object_info_options;
+		}
+		if (server_options.nr)
+			gtransport->server_options = &server_options;
+		result = transport_fetch_refs(gtransport, NULL);
+	} else if (negotiate_only) {
 		struct oidset acked_commits = OIDSET_INIT;
 		struct oidset_iter iter;
 		const struct object_id *oid;
