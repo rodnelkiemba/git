@@ -77,3 +77,7 @@ transfer.unpackLimit::
 transfer.advertiseSID::
 	Boolean. When true, client and server processes will advertise their
 	unique session IDs to their remote counterpart. Defaults to false.
+
+transfer.advertiseObjectInfo::
+	Boolean. When true or not set, server processes will advertise its
+	ability to accept `object-info` command requests
