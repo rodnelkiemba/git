@@ -5,6 +5,7 @@ struct ref;
 struct transport;
 struct strvec;
 struct transport_ls_refs_options;
+struct oid_array;
 
 struct transport_vtable {
 	/**
@@ -59,6 +60,7 @@ struct transport_vtable {
 	 * use. disconnect() releases these resources.
 	 **/
 	int (*disconnect)(struct transport *connection);
+	int (*fetch_object_info)(struct transport *transport, struct oid_array *oids);
 };
 
 #endif

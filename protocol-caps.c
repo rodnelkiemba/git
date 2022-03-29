@@ -8,6 +8,9 @@
 #include "object-store.h"
 #include "string-list.h"
 #include "strbuf.h"
+#include "config.h"
+
+static int advertise_object_info = -1;
 
 struct requested_info {
 	unsigned size : 1;
@@ -110,4 +113,12 @@ int cap_object_info(struct repository *r, struct packet_reader *request)
 	packet_flush(1);
 
 	return 0;
+}
+
+int object_info_advertise(struct repository *r, struct strbuf *value)
+{
+	if (advertise_object_info == -1 &&
+		git_config_get_bool("transfer.advertiseObjectInfo", &advertise_object_info))
+		advertise_object_info = 0;
+	return advertise_object_info;
 }

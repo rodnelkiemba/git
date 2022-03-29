@@ -353,6 +353,67 @@ static struct ref *handshake(struct transport *transport, int for_push,
 	return refs;
 }
 
+/*
+ * Fetches object info if server supports object-info command
+ * Make sure to fallback to normal fetch if this fails
+ */
+static int fetch_object_info(struct transport *transport)
+{
+	struct git_transport_data *data = transport->data;
+	struct object_info_args args;
+	struct packet_reader reader;
+
+	memset(&args, 0, sizeof(args));
+	args.server_options = transport->server_options;
+	args.object_info_options = transport->smart_options->object_info_options;
+	args.oids = transport->smart_options->object_info_oids;
+
+	connect_setup(transport, 0);
+	packet_reader_init(&reader, data->fd[0], NULL, 0,
+			PACKET_READ_CHOMP_NEWLINE |
+			PACKET_READ_DIE_ON_ERR_PACKET);
+	data->version = discover_version(&reader);
+
+	transport->hash_algo = reader.hash_algo;
+
+	switch (data->version) {
+	case protocol_v2:
+		if (!server_supports_v2("object-info", 0))
+			return 0;
+		send_object_info_request(data->fd[1], &args);
+		break;
+	case protocol_v1:
+	case protocol_v0:
+		die(_("wrong protocol version. expected v2"));
+	case protocol_unknown_version:
+		BUG("unknown protocol version");
+	}
+
+	if (packet_reader_read(&reader) != PACKET_READ_NORMAL) {
+		die(_("error reading object info header"));
+	}
+	if (strcmp(reader.line, "size")) {
+		die(_("expected 'size', received '%s'"), reader.line);
+	}
+	while (packet_reader_read(&reader) == PACKET_READ_NORMAL) {
+		printf("%s\n", reader.line);
+	}
+	check_stateless_delimiter(transport->stateless_rpc, &reader, "stateless delimiter expected");
+
+	return 1;
+}
+
+static int append_oid_to_ref(const struct object_id *oid, void *data)
+{
+	struct ref *ref = data;
+	struct ref *temp_ref = xcalloc(1, sizeof (struct ref));
+	temp_ref->old_oid = *oid;
+	temp_ref->exact_oid = 1;
+	ref->next = temp_ref;
+	ref = ref->next;
+	return 0;
+}
+
 static struct ref *get_refs_via_connect(struct transport *transport, int for_push,
 					struct transport_ls_refs_options *options)
 {
@@ -367,6 +428,7 @@ static int fetch_refs_via_pack(struct transport *transport,
 	struct ref *refs = NULL;
 	struct fetch_pack_args args;
 	struct ref *refs_tmp = NULL;
+	struct ref *wanted_refs = xcalloc(1, sizeof (struct ref));
 
 	memset(&args, 0, sizeof(args));
 	args.uploadpack = data->options.uploadpack;
@@ -392,8 +454,17 @@ static int fetch_refs_via_pack(struct transport *transport,
 	args.server_options = transport->server_options;
 	args.negotiation_tips = data->options.negotiation_tips;
 	args.reject_shallow_remote = transport->smart_options->reject_shallow;
+	args.object_info = transport->smart_options->object_info;
 
-	if (!data->got_remote_heads) {
+	if (transport->smart_options && transport->smart_options->object_info) {
+		struct ref *temp_ref = wanted_refs;
+		if (fetch_object_info(transport)) {
+			goto cleanup;
+		}
+		oid_array_for_each(transport->smart_options->object_info_oids, append_oid_to_ref, temp_ref);
+		wanted_refs = wanted_refs->next;
+		transport->remote_refs = wanted_refs;
+	} else if (!data->got_remote_heads) {
 		int i;
 		int must_list_refs = 0;
 		for (i = 0; i < nr_heads; i++) {
@@ -410,7 +481,7 @@ static int fetch_refs_via_pack(struct transport *transport,
 	else if (data->version <= protocol_v1)
 		die_if_server_options(transport);
 
-	if (data->options.acked_commits) {
+	if (data->options.acked_commits && !transport->smart_options->object_info) {
 		if (data->version < protocol_v2) {
 			warning(_("--negotiate-only requires protocol v2"));
 			ret = -1;
